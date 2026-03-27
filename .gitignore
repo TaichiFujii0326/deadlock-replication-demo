@@ -1,0 +1,17 @@
+# Binary
+/deadlock-replication-demo
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes (managed by docker compose)
+primary-data/
+replica-data/

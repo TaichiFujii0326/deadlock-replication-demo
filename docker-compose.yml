@@ -1,0 +1,56 @@
+services:
+  mysql-primary:
+    image: mysql:8.4
+    container_name: mysql-primary
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_ROOT_HOST: '%'
+      MYSQL_DATABASE: demo
+    volumes:
+      - ./mysql/primary/my.cnf:/etc/mysql/conf.d/my.cnf:ro
+      - primary-data:/var/lib/mysql
+    ports:
+      - "13306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  mysql-replica:
+    image: mysql:8.4
+    container_name: mysql-replica
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_ROOT_HOST: '%'
+      MYSQL_DATABASE: demo
+    volumes:
+      - ./mysql/replica/my.cnf:/etc/mysql/conf.d/my.cnf:ro
+      - replica-data:/var/lib/mysql
+    ports:
+      - "13307:3306"
+    depends_on:
+      mysql-primary:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  replication-init:
+    image: mysql:8.4
+    container_name: replication-init
+    volumes:
+      - ./mysql/init/00-setup-replication.sh:/setup.sh:ro
+    entrypoint: ["bash", "/setup.sh"]
+    depends_on:
+      mysql-primary:
+        condition: service_healthy
+      mysql-replica:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  primary-data:
+  replica-data:
