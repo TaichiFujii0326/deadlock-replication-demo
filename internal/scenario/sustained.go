@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"deadlock-replication-demo/internal/logger"
 	internalmysql "deadlock-replication-demo/internal/mysql"
 	"deadlock-replication-demo/internal/process"
 )
@@ -30,10 +31,15 @@ type LagSample struct {
 }
 
 // RunSustained reproduces the production scenario:
-//  1. Background traffic: 10 workers continuously writing to traffic_log (simulating normal app load)
+//  1. Background traffic: workers continuously writing to traffic_log
+//     (simulating normal app load + batch registration combined)
 //  2. After warmup, inject the problematic pattern (INSERT → API → DELETE)
 //  3. Observe how the "dam burst" from lock wait resolution overwhelms Replica
 //  4. Measure how long it takes for Replica to recover (or if it can't)
+//
+// In production, the phenomenon became severe when a batch registration job
+// coincided with the problematic Tx. The background workers here represent
+// that combined load (normal traffic + periodic batch registrations).
 func RunSustained(ctx context.Context, writer, reader *sql.DB, monitor *internalmysql.ReplicationMonitor) (*SustainedResult, error) {
 	const (
 		tenantID         = "tenant-A"
@@ -160,6 +166,8 @@ func RunSustained(ctx context.Context, writer, reader *sql.DB, monitor *internal
 	}()
 
 	// --- Phase 1: Warmup — let background traffic establish a baseline ---
+	logger.Banner("PHASE 1: Warmup (10秒)",
+		"バックグラウンドトラフィックのみ。ベースラインlag確認")
 	slog.Info("sustained_warmup", "phase", "sustained", "duration_seconds", warmupDuration.Seconds())
 	select {
 	case <-ctx.Done():
@@ -175,6 +183,8 @@ func RunSustained(ctx context.Context, writer, reader *sql.DB, monitor *internal
 		"lag_ms", monitor.LagMs())
 
 	// --- Phase 2: Inject the problematic pattern ---
+	logger.Banner("PHASE 2: 問題Tx注入 (3回 × 2並列)",
+		"バックグラウンド負荷の中で INSERT→API(2秒)→DELETE を注入。ダム決壊を観察")
 	slog.Info("sustained_injection", "phase", "sustained",
 		"description", "Injecting INSERT → API(2s) → DELETE with background traffic running")
 
@@ -231,6 +241,8 @@ func RunSustained(ctx context.Context, writer, reader *sql.DB, monitor *internal
 		"lag_ms", monitor.LagMs())
 
 	// --- Phase 3: Observe recovery (or lack thereof) ---
+	logger.Banner("PHASE 3: 回復観察 (60秒)",
+		"注入停止。通常トラフィック継続のまま、Replicaが追いつけるか観察")
 	slog.Info("sustained_recovery_observe", "phase", "sustained",
 		"description", "Background traffic continues. Watching if Replica can recover.")
 
@@ -306,6 +318,17 @@ func RunSustained(ctx context.Context, writer, reader *sql.DB, monitor *internal
 		"max_lag_ms", result.MaxLagMs,
 		"recovery_ms", result.RecoveryMs,
 	)
+
+	// Human-readable final summary
+	logger.Banner("Sustained Scenario Result", "持続的負荷シナリオの結果")
+	logger.Result(fmt.Sprintf("注入: deadlock=%d, commit=%d", result.InjectionDeadlocks, result.InjectionCommits))
+	logger.Result(fmt.Sprintf("最大lag: %dms", result.MaxLagMs))
+	if result.RecoveryMs > 0 {
+		logger.Result(fmt.Sprintf("回復: %dms後", result.RecoveryMs))
+	} else {
+		logger.Result("回復: 60秒経過後も回復せず")
+	}
+	logger.Result(fmt.Sprintf("バックグラウンド書き込み: %d回", result.BackgroundWrites))
 
 	return result, nil
 }

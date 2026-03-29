@@ -18,6 +18,8 @@ func main() {
 	flag.Parse()
 
 	logger.Init()
+	logger.Banner("MySQL Deadlock & Replication Lag Demo",
+		"検証①: 改善パターン比較  検証②: 持続的負荷による遅延再現")
 
 	slog.Info("demo_start", "mode", *mode)
 
@@ -68,4 +70,5 @@ func main() {
 	}
 
 	slog.Info("demo_complete")
+	logger.Banner("Demo Complete", "全シナリオ完了")
 }

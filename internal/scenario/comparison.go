@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"deadlock-replication-demo/internal/logger"
 	internalmysql "deadlock-replication-demo/internal/mysql"
 	"deadlock-replication-demo/internal/process"
 )
@@ -38,21 +39,42 @@ func RunComparison(ctx context.Context, writer, reader *sql.DB, monitor *interna
 
 	type runFunc func(ctx context.Context, db *sql.DB, tenantID, value string, apiDelay time.Duration) *process.Process1Result
 
-	patterns := []struct {
-		name string
-		fn   runFunc
-	}{
-		{"Before: API in Tx", process.RunProcess1},
-		{"A: API Outside Tx", process.RunProcess1_APIOutside},
-		{"B: API First", process.RunProcess1_APIFirst},
-		{"C: SELECT FOR UPDATE", process.RunProcess1_SelectForUpdate},
-		{"B+C: API First + SFU", process.RunProcess1_APIFirst_SFU},
-		{"A+C: API Outside + SFU", process.RunProcess1_APIOutside_SFU},
+	type patternDef struct {
+		name   string
+		fn     runFunc
+		desc   string
+		expect string
+	}
+
+	patterns := []patternDef{
+		{"Before: API in Tx", process.RunProcess1,
+			"Tx内で外部API(2秒)を呼ぶ元のパターン",
+			"デッドロック発生、ロック保持~2.6秒、Stale Read発生"},
+		{"A: API Outside Tx", process.RunProcess1_APIOutside,
+			"APIをTxの外に出す（Tx1: INSERT→COMMIT→API→Tx2: DELETE→COMMIT）",
+			"デッドロック0、ロック保持数ms、Stale Read 0"},
+		{"B: API First", process.RunProcess1_APIFirst,
+			"APIを先に実行してからTx内でINSERT+DELETE",
+			"デッドロック発生（INSERT→DELETEのロック競合は残る）"},
+		{"C: SELECT FOR UPDATE", process.RunProcess1_SelectForUpdate,
+			"SELECT FOR UPDATEでロック順序を固定",
+			"デッドロック0だがロック保持~3.6秒（最長）"},
+		{"B+C: API First + SFU", process.RunProcess1_APIFirst_SFU,
+			"BとCの組み合わせ",
+			"デッドロック0、ロック保持数ms"},
+		{"A+C: API Outside + SFU", process.RunProcess1_APIOutside_SFU,
+			"AとCの組み合わせ",
+			"デッドロック0、ロック保持数ms（Aと同等）"},
 	}
 
 	result := &ComparisonResult{}
 
 	for _, p := range patterns {
+		logger.BannerWithExpect(
+			fmt.Sprintf("TEST: %s", p.name),
+			p.desc,
+			p.expect,
+		)
 		slog.Info("comparison_pattern_start", "phase", "comparison", "pattern", p.name)
 
 		pr, err := runPattern(ctx, writer, reader, monitor, tenantID, apiDelay, p.name, p.fn)
@@ -75,6 +97,9 @@ func RunComparison(ctx context.Context, writer, reader *sql.DB, monitor *interna
 			"max_lag_ms", pr.MaxLagMs,
 		)
 
+		logger.Result(fmt.Sprintf("%s — deadlock=%d, commit=%dms, stale_reads=%d",
+			p.name, pr.DeadlockCount, pr.AvgCommitMs, pr.StaleReadCount))
+
 		// Wait for replica to catch up between patterns
 		time.Sleep(3 * time.Second)
 	}
@@ -92,6 +117,20 @@ func RunComparison(ctx context.Context, writer, reader *sql.DB, monitor *interna
 			"max_lag_ms", pr.MaxLagMs,
 		)
 	}
+
+	// Print human-readable comparison table to stderr
+	header := []string{"Pattern", "Deadlock", "Commit(ms)", "Stale Reads"}
+	var rows [][]string
+	for _, pr := range result.Patterns {
+		rows = append(rows, []string{
+			pr.Name,
+			fmt.Sprintf("%d", pr.DeadlockCount),
+			fmt.Sprintf("%d", pr.AvgCommitMs),
+			fmt.Sprintf("%d", pr.StaleReadCount),
+		})
+	}
+	logger.Banner("Comparison Summary", "全パターン比較結果")
+	logger.Table(header, rows)
 
 	slog.Info("phase_end", "phase", "comparison")
 	return result, nil
