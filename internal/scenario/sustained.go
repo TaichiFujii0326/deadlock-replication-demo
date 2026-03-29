@@ -43,8 +43,8 @@ type LagSample struct {
 func RunSustained(ctx context.Context, writer, reader *sql.DB, monitor *internalmysql.ReplicationMonitor) (*SustainedResult, error) {
 	const (
 		tenantID         = "tenant-A"
-		bgWorkers        = 5
-		writeInterval    = 3 * time.Millisecond // ~330 ops/sec per worker × 5 = ~1,600 ops/sec (INSERT+UPDATE)
+		bgWorkers        = 10
+		writeInterval    = 3 * time.Millisecond // ~330 ops/sec per worker × 10 = ~3,300 ops/sec (INSERT+UPDATE)
 		warmupDuration   = 10 * time.Second
 		observeDuration  = 60 * time.Second
 		apiDelay         = 2 * time.Second
@@ -264,11 +264,12 @@ func RunSustained(ctx context.Context, writer, reader *sql.DB, monitor *internal
 			"lag_ms", lagMs,
 			"bg_writes_total", bgWrites.Load())
 
-		// Check if a recent write is visible on Replica
+		// Check if a recent batch write is visible on Replica
+		// (models the production scenario: batch process writes to Writer, then reads from Replica)
 		var latestBg int64
 		writer.QueryRowContext(ctx, "SELECT MAX(id) FROM traffic_log").Scan(&latestBg)
 		if latestBg > 0 {
-			exists, _ := process.CheckIDExists(ctx, reader, latestBg)
+			exists, _ := process.CheckTrafficLogIDExists(ctx, reader, latestBg)
 			if !exists {
 				slog.Warn("sustained_stale_read", "phase", "sustained",
 					"expected_traffic_log_id", latestBg,

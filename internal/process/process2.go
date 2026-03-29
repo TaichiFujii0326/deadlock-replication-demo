@@ -45,13 +45,29 @@ func RunProcess2(ctx context.Context, db *sql.DB, tenantID string, expectedID in
 	return result
 }
 
-// CheckIDExists checks whether a specific ID exists on the Replica at all.
+// CheckIDExists checks whether a specific ID exists in configs on the Replica.
 // This is a direct replication lag check: if the row doesn't exist,
 // the INSERT hasn't been replicated yet.
 func CheckIDExists(ctx context.Context, db *sql.DB, id int64) (bool, error) {
 	var exists int
 	err := db.QueryRowContext(ctx,
 		`SELECT 1 FROM configs WHERE id = ? LIMIT 1`, id,
+	).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// CheckTrafficLogIDExists checks whether a specific ID exists in traffic_log on the Replica.
+// Used by the sustained scenario to detect stale reads in the batch registration process.
+func CheckTrafficLogIDExists(ctx context.Context, db *sql.DB, id int64) (bool, error) {
+	var exists int
+	err := db.QueryRowContext(ctx,
+		`SELECT 1 FROM traffic_log WHERE id = ? LIMIT 1`, id,
 	).Scan(&exists)
 	if err == sql.ErrNoRows {
 		return false, nil
