@@ -16,12 +16,18 @@ import (
 )
 
 type SustainedResult struct {
+	PatternName        string
 	BackgroundWrites   int64
 	InjectionDeadlocks int
 	InjectionCommits   int
 	MaxLagMs           int64
 	LagTimeline        []LagSample
 	RecoveryMs         int64
+}
+
+type InjectionPattern struct {
+	Name string
+	Fn   func(ctx context.Context, db *sql.DB, tenantID, value string, apiDelay time.Duration) *process.Process1Result
 }
 
 type LagSample struct {
@@ -40,7 +46,7 @@ type LagSample struct {
 // In production, the phenomenon became severe when a batch registration job
 // coincided with the problematic Tx. The background workers here represent
 // that combined load (normal traffic + periodic batch registrations).
-func RunSustained(ctx context.Context, writer, reader *sql.DB, monitor *internalmysql.ReplicationMonitor) (*SustainedResult, error) {
+func RunSustained(ctx context.Context, writer, reader *sql.DB, monitor *internalmysql.ReplicationMonitor, pattern InjectionPattern) (*SustainedResult, error) {
 	const (
 		tenantID         = "tenant-A"
 		bgWorkers        = 10
@@ -51,10 +57,11 @@ func RunSustained(ctx context.Context, writer, reader *sql.DB, monitor *internal
 	)
 
 	slog.Info("phase_start", "phase", "sustained",
-		"description", "Background traffic + problematic Tx injection → observe prolonged lag")
+		"pattern", pattern.Name,
+		"description", "Background traffic + injection → observe prolonged lag")
 
 	start := time.Now()
-	result := &SustainedResult{}
+	result := &SustainedResult{PatternName: pattern.Name}
 
 	// Re-seed configs for the injection
 	slog.Info("sustained_seeding", "phase", "sustained")
@@ -183,8 +190,8 @@ func RunSustained(ctx context.Context, writer, reader *sql.DB, monitor *internal
 		"lag_ms", monitor.LagMs())
 
 	// --- Phase 2: Inject the problematic pattern ---
-	logger.Banner("PHASE 2: 問題Tx注入 (3回 × 2並列)",
-		"バックグラウンド負荷の中で INSERT→API(2秒)→DELETE を注入。ダム決壊を観察")
+	logger.Banner(fmt.Sprintf("PHASE 2: 問題Tx注入 [%s] (3回 × 2並列)", pattern.Name),
+		"バックグラウンド負荷の中で注入。ダム決壊を観察")
 	slog.Info("sustained_injection", "phase", "sustained",
 		"description", "Injecting INSERT → API(2s) → DELETE with background traffic running")
 
@@ -202,7 +209,7 @@ func RunSustained(ctx context.Context, writer, reader *sql.DB, monitor *internal
 			injWg.Add(1)
 			go func(idx int) {
 				defer injWg.Done()
-				r := process.RunProcess1(ctx, writer, tenantID,
+				r := pattern.Fn(ctx, writer, tenantID,
 					fmt.Sprintf("inject-%d-%d", i, idx), apiDelay)
 				injResults <- injResult{r: r, idx: idx}
 			}(j)
@@ -321,7 +328,7 @@ func RunSustained(ctx context.Context, writer, reader *sql.DB, monitor *internal
 	)
 
 	// Human-readable final summary
-	logger.Banner("Sustained Scenario Result", "持続的負荷シナリオの結果")
+	logger.Banner(fmt.Sprintf("Sustained Scenario Result [%s]", pattern.Name), "持続的負荷シナリオの結果")
 	logger.Result(fmt.Sprintf("注入: deadlock=%d, commit=%d", result.InjectionDeadlocks, result.InjectionCommits))
 	logger.Result(fmt.Sprintf("最大lag: %dms", result.MaxLagMs))
 	if result.RecoveryMs > 0 {

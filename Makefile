@@ -1,4 +1,4 @@
-.PHONY: demo up wait run down logs status clean
+.PHONY: demo race-demo up wait run down logs status clean
 
 demo: up wait run
 
@@ -22,6 +22,9 @@ wait:
 
 run:
 	go run ./cmd/demo/...
+
+race-demo: up wait
+	go run ./cmd/race-demo/
 
 down:
 	docker compose down -v

@@ -10,11 +10,12 @@ import (
 
 	"deadlock-replication-demo/internal/logger"
 	internalmysql "deadlock-replication-demo/internal/mysql"
+	"deadlock-replication-demo/internal/process"
 	"deadlock-replication-demo/internal/scenario"
 )
 
 func main() {
-	mode := flag.String("mode", "all", "Run mode: all, comparison, sustained")
+	mode := flag.String("mode", "all", "Run mode: all, comparison, sustained, sustained-before, sustained-bc")
 	flag.Parse()
 
 	logger.Init()
@@ -45,6 +46,19 @@ func main() {
 	defer monCancel()
 	monitor.Start(monCtx)
 
+	sustainedPatterns := []scenario.InjectionPattern{
+		{"Before: API in Tx", process.RunProcess1},
+		{"B+C: API First + SFU", process.RunProcess1_APIFirst_SFU},
+	}
+
+	runSustainedPattern := func(p scenario.InjectionPattern) {
+		slog.Info("phase", "name", "sustained", "pattern", p.Name)
+		if _, err := scenario.RunSustained(ctx, writer, reader, monitor, p); err != nil {
+			slog.Error("sustained_failed", "pattern", p.Name, "error", err)
+			os.Exit(1)
+		}
+	}
+
 	switch *mode {
 	case "comparison":
 		if _, err := scenario.RunComparison(ctx, writer, reader, monitor); err != nil {
@@ -52,20 +66,21 @@ func main() {
 			os.Exit(1)
 		}
 	case "sustained":
-		if _, err := scenario.RunSustained(ctx, writer, reader, monitor); err != nil {
-			slog.Error("sustained_failed", "error", err)
-			os.Exit(1)
+		for _, p := range sustainedPatterns {
+			runSustainedPattern(p)
 		}
+	case "sustained-before":
+		runSustainedPattern(sustainedPatterns[0])
+	case "sustained-bc":
+		runSustainedPattern(sustainedPatterns[1])
 	default: // "all"
 		slog.Info("phase", "name", "comparison")
 		if _, err := scenario.RunComparison(ctx, writer, reader, monitor); err != nil {
 			slog.Error("comparison_failed", "error", err)
 			os.Exit(1)
 		}
-		slog.Info("phase", "name", "sustained")
-		if _, err := scenario.RunSustained(ctx, writer, reader, monitor); err != nil {
-			slog.Error("sustained_failed", "error", err)
-			os.Exit(1)
+		for _, p := range sustainedPatterns {
+			runSustainedPattern(p)
 		}
 	}
 
