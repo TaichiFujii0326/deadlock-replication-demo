@@ -1,4 +1,4 @@
-# 【図解】INSERT → 外部API → 論理削除：Tx内の外部API呼び出しがlock waitを爆増させる
+# DB障害を追う——lock waitの犯人は、たった1行のAPI呼び出しだった
 
 ## 障害発生
 
