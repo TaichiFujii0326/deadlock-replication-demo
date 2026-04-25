@@ -4,7 +4,7 @@
 
 データを保存する処理は成功している。しかし直後に走る後続処理で、そのデータがNOT FOUND（Laravel/Eloquentの `ModelNotFoundException: No query results for model [...]` として観測）。時間が経てばデータは存在する。再実行すれば成功する——。
 
-Writer/Readerレプリカ構成（Amazon Aurora MySQL）のシステムで、このエラーが散発的に報告されていました。同じ時期にlock waitやデッドロックも多発しており（[記事1](./article1.md)・[記事2](./article2.md)で調査）、当初は「lock waitによるレプリケーション遅延」が原因だと考えていました。
+Writer/Readerレプリカ構成（Amazon Aurora MySQL）のシステムで、このエラーが散発的に報告されていました。同じ時期に、[記事1](./article1.md)で扱ったlock waitやデッドロックも多発しており、[記事2](./article2.md)のダム決壊モデルから「lock waitによるレプリケーション遅延」が原因だと考えていました。
 
 ---
 
